@@ -6,7 +6,7 @@
 ;; Keywords: games
 ;; Version: 1.3
 ;; Created: Thu Oct 29 21:55:35 2009
-;; URL: http://github.com/zevlg/gnu-emacs-stuff/blob/master/sudoku.el
+;; URL: http://github.com/zevlg/sudoku.el/blob/master/sudoku.el
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License
@@ -150,7 +150,7 @@
   :group  'games
   :version "1.2"
   :link '(url-link :tag "sudoku.el sources at github"
-                   "http://github.com/zevlg/emacs-stuff/blob/master/sudoku.el")
+                   "http://github.com/zevlg/sudoku.el/blob/master/sudoku.el")
   :prefix "sudoku-")
 
 (defcustom sudoku-level 'easy
