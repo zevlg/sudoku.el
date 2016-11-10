@@ -1,12 +1,12 @@
 ;;; sudoku.el --- Simple sudoku game, can download puzzles from the web
 
-;; Copyright (C) 2009-2011,2015 by Zajcev Evgeny
+;; Copyright (C) 2009-2011,2015,2016 by Zajcev Evgeny
 
 ;; Author: Zajcev Evgeny <zevlg@yandex.ru>
-;; Keywords: games
-;; Version: 1.3
 ;; Created: Thu Oct 29 21:55:35 2009
-;; URL: http://github.com/zevlg/sudoku.el/blob/master/sudoku.el
+;; Keywords: games
+;; Package-Requires: ((emacs "24") (cl-lib "0.5"))
+;; Version: 1.4
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License
@@ -118,42 +118,36 @@
 ;; format, http://www.sadmansoftware.com/sudoku/faq19.htm) with
 ;; `sudoku-save-puzzle' (C-x C-s) and `sudoku-load-puzzle' commands.
 ;;
-;; To enable sudoku when opening file, use `find-file-magic-files-alist':
-;;
-;;   (autoload 'sudoku-sdk-file-p "sudoku" "Non-nil if file is sdk." t)
-;;   (push '(sudoku-sdk-file-p . sudoku-load-puzzle-noselect)
-;;         find-file-magic-files-alist)
-;;
-;; this is SXEmacs only feature.  Others should be fine with classical
-;; (push '("\\.sdk$" . sudoku-mode) auto-mode-alist)
+;; To make Emacs load puzzle with `C-x C-f' add next to init.el
+;; 
+;;   (add-to-list 'auto-mode-alist '("\\.sdk\\'" . sudoku-mode))
 
-;; TODO
-;; ~~~~
-;;   * Puzzle timer
+;;; History:
+;;  ~~~~~~~
 ;;
+;; Version 1.5: [TODO]
+;;   - Puzzle timer
+;; 
+;; Version 1.4:
+;;   - Initial port to GNU Emacs
 
 ;;; Code:
 
 
-(require 'cl)
+(require 'cl-lib)
 (require 'easymenu)
-
-;; XEmacs compatibility
-(unless (fboundp 'positivep)
-  (defun positivep (num)
-    (and (numberp num) (> num 0))))
 
 ;;{{{ Custom variables
 
 (defgroup sudoku nil
   "Sudoku - web-enabled puzzle game"
   :group  'games
-  :version "1.2"
+  :version "1.4"
   :link '(url-link :tag "sudoku.el sources at github"
                    "http://github.com/zevlg/sudoku.el/blob/master/sudoku.el")
   :prefix "sudoku-")
 
-(defcustom sudoku-level 'easy
+(defcustom sudoku-level 'hard
   "*Level of difficulty for sudoku."
   :type '(choice (const :tag "Easy" easy)
                  (const :tag "Medium" medium)
@@ -230,7 +224,7 @@
   "Style of board.
 Any style assumes fixed-width font."
   :type '(choice (const :tag "Plain" plain)
-		 (const :tag "Sharp sign borders" sharp)
+                 (const :tag "Sharp sign borders" sharp)
                  (const :tag "Unicode graphics" unicode))
   :group 'sudoku)
 
@@ -273,20 +267,20 @@ Called with one argument - cell."
 
 (defconst sudoku-style-chars
   '((unicode . [
-	      ;; ┏ ━ ┯ ┓   top outlines
-	      #x250f #x2501 #x252f #x2513
-	      ;; ┠ ┃ ┨ ┃   mid outlines
-	      #x2520 #x2503 #x2528 #x2503
-	      ;; ┗ ━ ┷ ┛   bottom outlines
-	      #x2517 #x2501 #x2537 #x251b
-	      ;; ┼ ─ │   insiders
-	      #x253c #x2500 #x2502])
+              ;; ┏ ━ ┯ ┓   top outlines
+              #x250f #x2501 #x252f #x2513
+              ;; ┠ ┃ ┨ ┃   mid outlines
+              #x2520 #x2503 #x2528 #x2503
+              ;; ┗ ━ ┷ ┛   bottom outlines
+              #x2517 #x2501 #x2537 #x251b
+              ;; ┼ ─ │   insiders
+              #x253c #x2500 #x2502])
     (plain . [?+ ?- ?+ ?+
-	      ?+ ?| ?+ ?|
-	      ?+ ?- ?+ ?+
-	      ?+ ?- ?|])
+              ?+ ?| ?+ ?|
+              ?+ ?- ?+ ?+
+              ?+ ?- ?|])
     (sharp .  [?# ?# ?# ?#
-	       ?# ?# ?# ?#
+               ?# ?# ?# ?#
                ?# ?# ?# ?#
                ?+ ?- ?|])))
 
@@ -441,9 +435,7 @@ Called with one argument - cell."
 
 (easy-menu-add-item nil '("tools" "games") ["Sudoku" sudoku t])
 
-(easy-menu-define
- sudoku-mode-menu sudoku-mode-map
- "Menu for sudoku game."
+(easy-menu-define sudoku-mode-menu sudoku-mode-map "sudoku menu."
  '("Sudoku"
    ["New game"      sudoku t]
    ["Reset game"    sudoku-restart t]
@@ -468,10 +460,21 @@ Called with one argument - cell."
 ;;}}}
 
 
-(defun insert-face (o face)
+(defmacro sudoku-positivep (num)
+  `(and (numberp ,num) (> ,num 0)))
+
+(defun sudoku-insert (o face)
   "Insert O and highlight with FACE."
   (let ((s (if (characterp o) (char-to-string o) o)))
     (insert (propertize s 'face face))))
+
+(defmacro sudoku-foreach-cell (cell &rest forms)
+  "Run FORMS for each CELL."
+  `(dotimes (i 9)
+     (dotimes (j 9)
+       (let ((,cell (cons i j)))
+         (progn ,@forms)))))
+(put 'sudoku-foreach-cell 'lisp-indent-function 'defun)
 
 ;;{{{ Sudoku command
 
@@ -479,15 +482,15 @@ Called with one argument - cell."
 ;; auto-mode-alist we have it
 (defun sudoku-mode ()
   "Major mode to solve sudoku puzzles.
-Entry to this mode runs the normal hook `sudoku-mode-hook'.
-Commands:
-\\{sudoku-mode-map}"
-  (interactive)
-  (if sudoku-puzzle
-      (sudoku-initialize sudoku-puzzle)
-    ;; Parse current file as SDK
-    (sudoku-load-puzzle (buffer-file-name (current-buffer)))))
 
+Commands:
+\\{sudoku-mode-map}
+
+Entering to this mode runs the normal hook `sudoku-mode-hook'."
+  (interactive)
+  (set-buffer (sudoku-load-puzzle (buffer-file-name))))
+
+;;;###autoload
 (defun sudoku (&optional arg)
   "Start playing sudoku.
 Avoid selecting already solved puzzle unless prefix ARG is specified."
@@ -499,7 +502,7 @@ Avoid selecting already solved puzzle unless prefix ARG is specified."
            (nsp (or (and arg puzs)
                     ;; Remove current puzzle and already solved
                     ;; puzzles
-                    (set-difference
+                    (cl-set-difference
                      puzs (cons (sudoku-puzzle-in-bif sudoku-puzzle)
                                 sudoku-solved-puzzles)
                      :test #'equal))))
@@ -543,12 +546,6 @@ Avoid selecting already solved puzzle unless prefix ARG is specified."
     ;; Setup modeline for sudoku
     (sudoku-mode-setup-modeline)
 
-    ;; Setup menubar
-    (when (featurep 'menubar)
-      (set-buffer-menubar current-menubar)
-      (add-submenu '() sudoku-mode-menu)
-      (setq mode-popup-menu sudoku-mode-menu))
-
     ;; make buffer visible
     (unless no-select
       (switch-to-buffer (current-buffer)))
@@ -578,10 +575,10 @@ Avoid selecting already solved puzzle unless prefix ARG is specified."
   (setq mode-line-format
         (list
          "%e"
-	 mode-line-front-space mode-line-mule-info mode-line-client
-	 mode-line-modified mode-line-remote mode-line-frame-identification
-	 mode-line-buffer-identification
-	 "  "
+         mode-line-front-space mode-line-mule-info mode-line-client
+         mode-line-modified mode-line-remote mode-line-frame-identification
+         mode-line-buffer-identification
+         "  "
          '("Cell: " sudoku-modeline-cell)
          '(sudoku-modeline-show-values
            (", Hints: " sudoku-modeline-possible-values))
@@ -595,7 +592,7 @@ Avoid selecting already solved puzzle unless prefix ARG is specified."
         (sudoku-cell-name (sudoku-current-cell))
         sudoku-modeline-possible-values
         (sudoku-cell-possibles-string))
-  (redraw-modeline))
+  (force-mode-line-update))
 
 ;;}}}
 ;;{{{ Custom puzzle editor
@@ -703,11 +700,11 @@ If called with prefix arg then edit empty puzzle."
 already in the row, column, and subsquare containing it."
   (unless cell (setq cell (sudoku-current-cell)))
   (when (sudoku-cell-empty-p cell)
-    (set-difference '(1 2 3 4 5 6 7 8 9)
-                    (mapcar #'sudoku-cell-value
-                            (append (sudoku-col-cells cell)
-                                    (sudoku-row-cells cell)
-                                    (sudoku-square-cells cell))))))
+    (cl-set-difference '(1 2 3 4 5 6 7 8 9)
+                       (mapcar #'sudoku-cell-value
+                               (append (sudoku-col-cells cell)
+                                       (sudoku-row-cells cell)
+                                       (sudoku-square-cells cell))))))
 (put 'sudoku-cell-possibles 'method-name "S1")
 
 (defun sudoku-cell-possibles-string (&optional cell)
@@ -742,14 +739,14 @@ With this solver you can solve almost any `hard' sudoku,
 but not `evil'."
   (unless cell (setq cell (sudoku-current-cell)))
   (when (sudoku-cell-empty-p cell)
-    (remove-duplicates
-     (mapcan #'(lambda (posvs)
-                 (set-difference '(1 2 3 4 5 6 7 8 9) posvs))
+    (cl-remove-duplicates
+     (cl-mapcan #'(lambda (posvs)
+                    (cl-set-difference '(1 2 3 4 5 6 7 8 9) posvs))
              (mapcar #'(lambda (some-cells)
-                         (mapcan #'(lambda (cc)
-                                     (or (sudoku-cell-possibles cc)
-                                         (list (sudoku-cell-value cc))))
-                                 some-cells))
+                         (cl-mapcan #'(lambda (cc)
+                                        (or (sudoku-cell-possibles cc)
+                                            (list (sudoku-cell-value cc))))
+                                    some-cells))
                      (mapcar #'(lambda (cells) (remove cell cells))
                              (list (sudoku-row-cells cell)
                                    (sudoku-col-cells cell)
@@ -762,33 +759,33 @@ but not `evil'."
 Assumes SET is a valid set.  With optional ARITY, returns only subsets
 with ARITY members."
   (cond ((null arity)
-	 (setq arity 0)
-	 (mapcan #'(lambda (elt)
-                     (sudoku-set-combinations set (incf arity)))
-                 set))
-	((= arity 1) (mapcar #'list set))
-	((<= arity 0) '(nil))
-	(t (let ((rest) (ctr 1))
-             (mapcan #'(lambda (first)
-                         (setq rest (nthcdr ctr set)
-                               ctr (1+ ctr))
-                         (mapcar #'(lambda (elt) (cons first elt))
-                                 (sudoku-set-combinations rest (1- arity))))
-                     set)))))
+         (setq arity 0)
+         (cl-mapcan #'(lambda (elt)
+                        (sudoku-set-combinations set (incf arity)))
+                    set))
+        ((= arity 1) (mapcar #'list set))
+        ((<= arity 0) '(nil))
+        (t (let ((rest) (ctr 1))
+             (cl-mapcan #'(lambda (first)
+                            (setq rest (nthcdr ctr set)
+                                  ctr (1+ ctr))
+                            (mapcar #'(lambda (elt) (cons first elt))
+                                    (sudoku-set-combinations rest (1- arity))))
+                        set)))))
 
 (defun sudoku-cells-constrains (cells)
   "Return any existing constrains for CELLS set."
-  (let* ((rcells (remove-if-not #'sudoku-cell-empty-p cells))
+  (let* ((rcells (cl-remove-if-not #'sudoku-cell-empty-p cells))
          (rposss (mapcar #'(lambda (cc)
                              (cons cc (sudoku-cell-possibles cc)))
                          rcells))
-         (combs (mapcan #'(lambda (ar)
-                            (sudoku-set-combinations rcells ar))
-                        (loop for i from 2 below (length rcells)
-                          collect i))))
+         (combs (cl-mapcan #'(lambda (ar)
+                               (sudoku-set-combinations rcells ar))
+                           (loop for i from 2 below (length rcells)
+                                 collect i))))
     (cl-flet ((getpos (cl) (cdr (assoc cl rposss))))
       (loop for com in combs
-        for compos = (reduce #'union (mapcar #'getpos com))
+        for compos = (cl-reduce #'union (mapcar #'getpos com))
         when (= (length compos) (length com))
         collect (cons com compos)))))
 
@@ -807,7 +804,7 @@ solution is found."
     ;; Step 1. SiSo
     ;; Step 2. Hidden single
     (loop for continue = nil
-      for ecs = (remove-if-not #'sudoku-cell-empty-p (sudoku-board-cells))
+      for ecs = (cl-remove-if-not #'sudoku-cell-empty-p (sudoku-board-cells))
       do (mapc #'(lambda (cc)
                    (let ((poss (sudoku-cell-possibles cc)))
                      (if (null poss)
@@ -843,11 +840,11 @@ solution is found."
 
           (t
            ;; Step 3. Trial and error
-           (let* ((ecs (remove-if-not #'sudoku-cell-empty-p
-                                      (sudoku-board-cells)))
+           (let* ((ecs (cl-remove-if-not #'sudoku-cell-empty-p
+                                         (sudoku-board-cells)))
                   (ecs-ps (sort
-                           (mapcar* #'cons ecs
-                                    (mapcar #'sudoku-cell-possibles ecs))
+                           (cl-mapcar #'cons ecs
+                                      (mapcar #'sudoku-cell-possibles ecs))
                            #'(lambda (e1 e2)
                                (< (length (cdr e1))
                                   (length (cdr e2))))))
@@ -861,7 +858,7 @@ solution is found."
                if sol nconc sol and do (incf sols)
                if (boundp 'trials) do (incf trials)
                if (and err-non-uniq (> sols 1))
-               do (signal-error 'sudoku-non-uniq sol))
+               do (signal 'sudoku-non-uniq sol))
               )))))
 
 (defun sudoku-solution-stats (board)
@@ -952,14 +949,6 @@ By default MIN-HINTS is 30."
                 collect (cons i j))
     nconc col))
 
-(defmacro sudoku-foreach-cell (cell &rest forms)
-  "Run FORMS for each CELL."
-  `(dotimes (i 9)
-     (dotimes (j 9)
-       (let ((,cell (cons i j)))
-         (progn ,@forms)))))
-(put 'sudoku-foreach-cell 'lisp-indent-function 'defun)
-
 (defun sudoku-autoinsert-only (func by-cell &optional deduce)
   "For each cell in the board insert only possible value, if any.
 Return non-nil if at least one value has been inserted."
@@ -1003,8 +992,8 @@ Return non-nil if at least one has been inserted."
     (loop for fc in sqc
       for scs on sqc
       do (loop for sc in scs
-           do (let ((cd (set-difference (car fc) (car sc) :test #'equal))
-                    (cv (set-difference (cdr fc) (cdr sc))))
+           do (let ((cd (cl-set-difference (car fc) (car sc) :test #'equal))
+                    (cv (cl-set-difference (cdr fc) (cdr sc))))
                 (when (and (= 1 (length cd)) (= 1 (length cv)))
                   (sudoku-test-and-change
                    (first cd) (list (first cv) :face 'sudoku-autovalue-face
@@ -1045,18 +1034,18 @@ then it means it found contradiction, so some of your previous moves
 was incorrect.
 Auto-insert does not work for pencils."
   (interactive)
-  (unless (or (positivep sudoku-current-pencil)
+  (unless (or (sudoku-positivep sudoku-current-pencil)
               (and cell (sudoku-cell-empty-p cell)))
     (let ((gc (or cell (sudoku-current-cell)))
           (sb (copy-tree sudoku-current-board)))
       (unwind-protect
           (block 'autoins
-            (while (some #'(lambda (fun)
-                             (let ((rv (funcall fun cell deduce)))
-                               (when (and deduce rv)
-                                 (return-from 'autoins t))
-                               rv))
-                         sudoku-deduce-methods)))
+            (while (cl-some #'(lambda (fun)
+                                (let ((rv (funcall fun cell deduce)))
+                                  (when (and deduce rv)
+                                    (return-from 'autoins t))
+                                  rv))
+                            sudoku-deduce-methods)))
         ;; Save previous board to stack, for undo
         (unless (equal sb sudoku-current-board)
           (push sb sudoku-boards-stack))
@@ -1153,10 +1142,10 @@ Auto-insert does not work for pencils."
 
 (defun sudoku-board-insert-cell (cell)
   (if (or (null cell) (and (numberp cell) (= cell 0)))
-      (insert-face (sudoku-blank-cell) 'sudoku-face)
-    (insert-face (+ 48 (sudoku-cell-num cell))
-                 (or (plist-get (sudoku-cell-props cell) :face)
-                     'sudoku-orig-value-face))))
+      (sudoku-insert (sudoku-blank-cell) 'sudoku-face)
+    (sudoku-insert (+ 48 (sudoku-cell-num cell))
+                   (or (plist-get (sudoku-cell-props cell) :face)
+                       'sudoku-orig-value-face))))
 
 (defun sudoku-pid-with-commas (pid)
   "Format PID with commas inside."
@@ -1174,8 +1163,7 @@ Auto-insert does not work for pencils."
 
 (defun sudoku-relative-filename (file)
   "Return relative filename for FILE."
-  (if (string-match (concat "^" (user-home-directory) "/\\(.*\\)")
-                    file)
+  (if (string-match (concat "^" (expand-file-name "~") "/\\(.*\\)") file)
       (concat "~/" (match-string 1 file))
     file))
 
@@ -1215,80 +1203,83 @@ If MESSAGE is specified insert it after the board."
           (setq help-strings (sudoku-custom-instructions))
         (setq help-strings (sudoku-board-instructions))))
     ;; Fix help strings list
-    (setq help-strings (remove-if-not #'stringp help-strings))
+    (setq help-strings (cl-remove-if-not #'stringp help-strings))
     (let* ((style (cdr (assq sudoku-style sudoku-style-chars)))
-	   (top-hc (make-string 7 (aref style 1)))
-	   (bot-hc (make-string 7 (aref style 9)))
+           (top-hc (make-string 7 (aref style 1)))
+           (bot-hc (make-string 7 (aref style 9)))
            (hc (make-string 7 (aref style 13))))
       (cl-flet* ((inshelp ()
                (let ((hs (pop help-strings)))
                  (when hs (insert "    " hs))))
              (insrow (rownum)
                (let ((row (nth rownum board)))
-                 (insert-face (format "%c " (aref style 5))
-                              'sudoku-face)
+                 (sudoku-insert (format "%c " (aref style 5))
+                                'sudoku-face)
                  (sudoku-board-insert-cell (nth 0 row))
-                 (insert-face " " 'sudoku-face)
+                 (sudoku-insert " " 'sudoku-face)
                  (sudoku-board-insert-cell (nth 1 row))
-                 (insert-face " " 'sudoku-face)
+                 (sudoku-insert " " 'sudoku-face)
                  (sudoku-board-insert-cell (nth 2 row))
-                 (insert-face " " 'sudoku-face)
-                 (insert-face (format "%c " (aref style 14))
-                              'sudoku-face)
+                 (sudoku-insert " " 'sudoku-face)
+                 (sudoku-insert (format "%c " (aref style 14))
+                                'sudoku-face)
                  (sudoku-board-insert-cell (nth 3 row))
-                 (insert-face " " 'sudoku-face)
+                 (sudoku-insert " " 'sudoku-face)
                  (sudoku-board-insert-cell (nth 4 row))
-                 (insert-face " " 'sudoku-face)
+                 (sudoku-insert " " 'sudoku-face)
                  (sudoku-board-insert-cell (nth 5 row))
-                 (insert-face " " 'sudoku-face)
-                 (insert-face (format "%c " (aref style 14))
-                              'sudoku-face)
+                 (sudoku-insert " " 'sudoku-face)
+                 (sudoku-insert (format "%c " (aref style 14))
+                                'sudoku-face)
                  (sudoku-board-insert-cell (nth 6 row))
-                 (insert-face " " 'sudoku-face)
+                 (sudoku-insert " " 'sudoku-face)
                  (sudoku-board-insert-cell (nth 7 row))
-                 (insert-face " " 'sudoku-face)
+                 (sudoku-insert " " 'sudoku-face)
                  (sudoku-board-insert-cell (nth 8 row))
-                 (insert-face " " 'sudoku-face)
-                 (insert-face (format "%c" (aref style 7))
-                              'sudoku-face)
+                 (sudoku-insert " " 'sudoku-face)
+                 (sudoku-insert (format "%c" (aref style 7))
+                                'sudoku-face)
                  (inshelp)
                  (insert "\n")
                  )))
-        (insert-face (format "%c%s%c%s%c%s%c"
-                       (aref style 0) top-hc (aref style 2) top-hc
-                       (aref style 2) top-hc (aref style 3))
-                     'sudoku-face)
+        (sudoku-insert (format "%c%s%c%s%c%s%c"
+                               (aref style 0) top-hc (aref style 2) top-hc
+                               (aref style 2) top-hc (aref style 3))
+                       'sudoku-face)
         (insert "\n")
         (insrow 0) (insrow 1) (insrow 2)
-        (insert-face (format "%c%s%c%s%c%s%c"
-                       (aref style 4) hc (aref style 12) hc
-                       (aref style 12) hc (aref style 6))
-                     'sudoku-face)
+        (sudoku-insert (format "%c%s%c%s%c%s%c"
+                               (aref style 4) hc (aref style 12) hc
+                               (aref style 12) hc (aref style 6))
+                       'sudoku-face)
         (inshelp) (insert "\n")
         (insrow 3) (insrow 4) (insrow 5)
-        (insert-face (format "%c%s%c%s%c%s%c"
-                       (aref style 4) hc (aref style 12) hc
-                       (aref style 12) hc (aref style 6))
-                     'sudoku-face)
+        (sudoku-insert (format "%c%s%c%s%c%s%c"
+                               (aref style 4) hc (aref style 12) hc
+                               (aref style 12) hc (aref style 6))
+                       'sudoku-face)
         (inshelp) (insert "\n")
         (insrow 6) (insrow 7) (insrow 8)
-        (insert-face (format "%c%s%c%s%c%s%c"
-                       (aref style 8) bot-hc (aref style 10) bot-hc
-                       (aref style 10) bot-hc (aref style 11))
-                     'sudoku-face)
+        (sudoku-insert (format "%c%s%c%s%c%s%c"
+                               (aref style 8) bot-hc (aref style 10) bot-hc
+                               (aref style 10) bot-hc (aref style 11))
+                       'sudoku-face)
         (inshelp) (insert "\n")
         (when (sudoku-puzzle-url sudoku-puzzle)
-	  (insert "\n")
+          (insert "\n")
           (insert " URL: " (sudoku-puzzle-url sudoku-puzzle) "\n"))
         ))))
 
 (defun sudoku-board-redraw (&optional board help-strings)
   "Redraw sudoku board, keeping point at current cell."
-  (let ((cell (sudoku-current-cell))
-        (buffer-read-only nil))
-    (erase-buffer)
-    (sudoku-board-print (or board sudoku-current-board) help-strings)
-    (sudoku-goto-cell cell)))
+  (let ((sdk-buf (get-buffer sudoku-buffer-name)))
+    (when (buffer-live-p sdk-buf)
+      (with-current-buffer sdk-buf
+        (let ((cell (sudoku-current-cell))
+              (buffer-read-only nil))
+          (erase-buffer)
+          (sudoku-board-print (or board sudoku-current-board) help-strings)
+          (sudoku-goto-cell cell))))))
 
 ;;}}}
 ;;{{{ Changing cells
@@ -1365,22 +1356,23 @@ Erase current cell if interactively called."
          (cl (+ 2 (* 2 (+ (/ col 3) col))))
          (ln (+ 2 (/ lin 3) lin)))
     (save-excursion
-      (goto-line ln) (move-to-column cl)
+      (goto-char (point-min))
+      (forward-line (1- ln)) (move-to-column cl)
       (point))))
 
 (defun sudoku-current-value-face ()
   "Return face to be used for value."
   (if (memq sudoku-current-pencil '(1 2))
       (let ((fc (intern (format "sudoku-value-pencil-%d-face"
-				sudoku-current-pencil))))
-	(if (zerop (length (remove-if-not
-			    #'(lambda (cc)
-				(eq (sudoku-cell-plist-get cc :pencil)
-				    sudoku-current-pencil))
-			    (sudoku-board-cells))))
-	    ;; First time pencil value is used
-	    (list 'sudoku-orig-value-face fc)
-	  fc))
+                                sudoku-current-pencil))))
+        (if (zerop (length (cl-remove-if-not
+                            #'(lambda (cc)
+                                (eq (sudoku-cell-plist-get cc :pencil)
+                                    sudoku-current-pencil))
+                            (sudoku-board-cells))))
+            ;; First time pencil value is used
+            (list 'sudoku-orig-value-face fc)
+          fc))
     'sudoku-value-face))
 
 (defun sudoku-point-genprops (num)
@@ -1391,7 +1383,7 @@ Erase current cell if interactively called."
 
 (defun sudoku-remaining-cells (&optional board)
   "Tests to see how many cells are remaining"
-  (count 0 (apply #'append (or board sudoku-current-board))))
+  (cl-count 0 (apply #'append (or board sudoku-current-board))))
 
 (defun sudoku-completion-routine ()
   "Runs when there are no cells remaining. Gives a message of
@@ -1423,7 +1415,7 @@ If prefig ARG is specified, then reset pencil mode to previous one.
 If `sudoku-current-pencil' is 2, then reset to pen."
   (interactive "P")
   (cond (arg
-         (when (positivep sudoku-current-pencil)
+         (when (sudoku-positivep sudoku-current-pencil)
            (let* ((cp sudoku-current-pencil)
                   (sudoku-current-pencil (1- cp)))
              (sudoku-pencil-reset cp))
@@ -1443,10 +1435,10 @@ If `sudoku-current-pencil' is 2, then reset to pen."
 (defun sudoku-pencil-reset (&rest pencils)
   "Reset/accept pencil values for PENCILS."
   (interactive)
-  (let ((ap (and (some #'(lambda (c)
-                           (memq (sudoku-cell-plist-get c :pencil)
-                                 pencils))
-                       (sudoku-board-cells))
+  (let ((ap (and (cl-some #'(lambda (c)
+                              (memq (sudoku-cell-plist-get c :pencil)
+                                    pencils))
+                          (sudoku-board-cells))
                  (y-or-n-p (format "Accept %s pencil%s? "
                                    (if (> (length pencils) 1)
                                        "all"
@@ -1540,7 +1532,8 @@ Doesn't let you go outside the bounds of the board."
 
 (defun sudoku-disabled-key ()
   (interactive)
-  (message "%s is disabled in sudoku-mode" (key-description (this-command-keys))))
+  (message "%s is disabled in sudoku-mode"
+           (key-description (this-command-keys))))
 
 (defun sudoku-goto-center ()
   (interactive)
@@ -1589,16 +1582,14 @@ Doesn't let you go outside the bounds of the board."
     (message "Downloading %S puzzle from %S..."
              level sudoku-download-source))
   (let* ((source (sudoku-download-source level pid))
-         (sud (with-temp-buffer
-                (if (fboundp 'url-retrieve)
-                    (let ((url-working-buffer (current-buffer)))
-                      (declare (special url-working-buffer))
-                      (url-retrieve source))
-                  (call-process "curl" nil t nil "-s" source))
-                (goto-char (point-min))
-                (ecase sudoku-download-source
-                  (websudoku (sudoku-parse-websudoku))
-                  (menneske (sudoku-parse-menneske))))))
+         (sud (with-current-buffer (url-retrieve-synchronously source)
+                (unwind-protect
+                    (progn
+                      (goto-char (point-min))
+                      (ecase sudoku-download-source
+                        (websudoku (sudoku-parse-websudoku))
+                        (menneske (sudoku-parse-menneske))))
+                  (kill-buffer)))))
     (sudoku-make-puzzle
      `(,(car sud) :level ,level
        :url ,(sudoku-download-source level (plist-get (cdr sud) :id))
@@ -1618,12 +1609,14 @@ Doesn't let you go outside the bounds of the board."
 
     ;; Cut to table
     (save-excursion
-      (delete-region (point-min)
-                     (and (search-forward
-                           "<FORM NAME=\"board\" METHOD=POST ACTION=\"./\">")
-                          (match-beginning 0)))
-      (delete-region (and (search-forward "</TABLE>")
-                          (match-end 0)) (point-max)))
+      (delete-region
+       (point-min)
+       (and (re-search-forward
+             "<FORM NAME=\"board\" METHOD=POST ACTION=\"./\"[^>]*>")
+            (match-beginning 0)))
+      (delete-region
+       (and (search-forward "</TABLE>") (match-end 0))
+       (point-max)))
 
     ;; collect all 81 cell-values in a list.
     (list (loop while (re-search-forward "<INPUT CLASS=\\([ds]0\\)" nil t)
@@ -1728,7 +1721,7 @@ Doesn't let you go outside the bounds of the board."
                                        r ""))
                         board "\r\n")))
       (with-temp-buffer
-        (insert "#A (S)XEmacs sudoku\r\n")
+        (insert "#A Emacs sudoku.el\r\n")
         (insert "#U "
           (or (sudoku-puzzle-url sudoku-puzzle)
               "http://lgarc.narod.ru/xemacs/sudoku.el") "\r\n")
@@ -1749,34 +1742,6 @@ Doesn't let you go outside the bounds of the board."
         (write-file file))))
   (setf (sudoku-puzzle-file sudoku-puzzle) file)
   (sudoku-board-redraw))
-
-(defun sudoku-sdk-file-p (file)
-  "Return non-nil if FILE can be readed by `sudoku-load-puzzle'.
-Can be used with `find-file-magic-files-alist'."
-  (ignore-errors
-    (block 'sdk-file
-      (with-temp-buffer
-        (insert-file-contents-literally file)
-        (goto-char (point-min))
-        (while (looking-at "#\\(A\\|B\\|C\\|D\\|S\\|U\\|L\\|N\\|H\\) ?.*\r?$")
-          (forward-line))
-        (when (looking-at "\\[Puzzle\\]\r?$")
-          (forward-line))
-        (dotimes (i 9)
-          (unless (looking-at "^[123456789.]\\{9,9\\}\r?$")
-            (return-from 'sdk-file nil))
-          (forward-line))
-
-        ;; State
-        (unless (eobp)
-          (unless (looking-at "\\[State\\]\r?$")
-            (return-from 'sdk-file nil))
-          (forward-line)
-          (dotimes (i 9)
-            (unless (looking-at "^[123456789.]\\{9,9\\}\r?$")
-              (return-from 'sdk-file nil))
-            (forward-line)))
-        t))))
 
 (defun sudoku-load-puzzle (file &optional no-select)
   "Load sdk FILE."
@@ -1834,9 +1799,10 @@ And append them into built-in puzzles table."
 
 (defun sudoku-builtin-puzzles (level)
   "Filter builtin puzzles by LEVEL."
-  (remove-if-not #'(lambda (bip)
-                     (eq (plist-get (cdr bip) :level) level))
-                 sudoku-builtin-puzzles))
+  (declare (special sudoku-builtin-puzzles)) ;shutup compiler
+  (cl-remove-if-not #'(lambda (bip)
+                        (eq (plist-get (cdr bip) :level) level))
+                    sudoku-builtin-puzzles))
 
 (defun sudoku-string-to-board (nl)
   "Convert flat numbers list NL to sudoku board."
