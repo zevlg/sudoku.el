@@ -5,7 +5,7 @@
 ;; Author: Zajcev Evgeny <zevlg@yandex.ru>
 ;; Created: Thu Oct 29 21:55:35 2009
 ;; Keywords: games
-;; Package-Requires: ((emacs "24.4") (cl-lib "0.5"))
+;; Package-Requires: ((emacs "24.4"))
 ;; Version: 1.4
 
 ;; This program is free software; you can redistribute it and/or
@@ -136,6 +136,8 @@
 
 (require 'cl-lib)
 (require 'easymenu)
+(eval-when-compile
+  (require 'cl)) ;; for defsetf
 
 ;;{{{ Custom variables
 
@@ -290,7 +292,7 @@ Called with one argument - cell."
 (defvar sudoku-custom-puzzles nil
   "List of custom sudoku puzzles.")
 
-(defstruct (sudoku-puzzle (:type list))
+(cl-defstruct (sudoku-puzzle (:type list))
   board                                 ; puzzle board
   plist)                                ; puzzle properties
 
@@ -673,8 +675,8 @@ If called with prefix arg then edit empty puzzle."
 
 (defun sudoku-calculate-possibles ()
   "Calculate list of possible values for whole board."
-  (loop for x from 0 below 9
-    collect (loop for y from 0 below 9
+  (cl-loop for x from 0 below 9
+    collect (cl-loop for y from 0 below 9
               collect (sudoku-cell-possibles (cons x y)))))
 
 (defmacro sudoku-cell-ref (cell board)
@@ -718,19 +720,19 @@ already in the row, column, and subsquare containing it."
   (let* ((sn (+ (* (/ (cdr cell) 3) 3) (/ (car cell) 3)))
          (srow (* 3 (/ sn 3))) (scol (* (mod sn 3) 3))
          ret)
-    (loop for r from srow to (+ 2 srow)
-      do (loop for c from scol to (+ 2 scol)
+    (cl-loop for r from srow to (+ 2 srow)
+      do (cl-loop for c from scol to (+ 2 scol)
            do (push (cons c r) ret)))
     ret))
 
 (defun sudoku-row-cells (cell)
   "Return cells list for row where CELL is."
-  (loop for i from 0 below 9
+  (cl-loop for i from 0 below 9
     collect (cons i (cdr cell))))
 
 (defun sudoku-col-cells (cell)
   "Return cells list for column where CELL is."
-  (loop for i from 0 below 9
+  (cl-loop for i from 0 below 9
     collect (cons (car cell) i)))
 
 (defun sudoku-cell-possibles-hidden-only (&optional cell)
@@ -781,11 +783,11 @@ with ARITY members."
                          rcells))
          (combs (cl-mapcan #'(lambda (ar)
                                (sudoku-set-combinations rcells ar))
-                           (loop for i from 2 below (length rcells)
+                           (cl-loop for i from 2 below (length rcells)
                                  collect i))))
     (cl-flet ((getpos (cl) (cdr (assoc cl rposss))))
-      (loop for com in combs
-        for compos = (cl-reduce #'union (mapcar #'getpos com))
+      (cl-loop for com in combs
+        for compos = (cl-reduce #'cl-union (mapcar #'getpos com))
         when (= (length compos) (length com))
         collect (cons com compos)))))
 
@@ -803,7 +805,7 @@ solution is found."
         error)
     ;; Step 1. SiSo
     ;; Step 2. Hidden single
-    (loop for continue = nil
+    (cl-loop for continue = nil
       for ecs = (cl-remove-if-not #'sudoku-cell-empty-p (sudoku-board-cells))
       do (mapc #'(lambda (cc)
                    (let ((poss (sudoku-cell-possibles cc)))
@@ -851,7 +853,7 @@ solution is found."
                   (fecv (car ecs-ps))
                   (f-cell (car fecv))
                   (f-poss (cdr fecv)))
-             (loop for pv in f-poss
+             (cl-loop for pv in f-poss
                for sols = 0 then sols
                do (sudoku-change-cell f-cell pv)
                for sol = (sudoku-board-solutions nil err-non-uniq)
@@ -912,8 +914,8 @@ By default MIN-HINTS is 30."
   (unless min-hints (setq min-hints 30))
   (let ((rcs (sudoku-shuffle-list (sudoku-board-cells)))
         sudoku-current-board)
-    (loop for sudoku-current-board = (sudoku-board-random)
-      do (loop for rc in rcs
+    (cl-loop for sudoku-current-board = (sudoku-board-random)
+      do (cl-loop for rc in rcs
            for sv = (sudoku-cell-value rc)
            do (sudoku-change-cell rc 0)
            do (condition-case nil
@@ -944,8 +946,8 @@ By default MIN-HINTS is 30."
 
 (defun sudoku-board-cells ()
   "Return list of all cells."
-  (loop for i from 0 below 9
-    for col = (loop for j from 0 below 9
+  (cl-loop for i from 0 below 9
+    for col = (cl-loop for j from 0 below 9
                 collect (cons i j))
     nconc col))
 
@@ -953,7 +955,7 @@ By default MIN-HINTS is 30."
   "For each cell in the board insert only possible value, if any.
 Return non-nil if at least one value has been inserted."
   (unless func (setq func #'sudoku-cell-possibles))
-  (let ((ocv (loop for cc in (sudoku-board-cells)
+  (let ((ocv (cl-loop for cc in (sudoku-board-cells)
                for pss = (funcall func cc)
                if (= (length pss) 1)
                return (cons cc (first pss)))))
@@ -989,9 +991,9 @@ Return non-nil if at least one has been inserted."
                    #'(lambda (cs1 cs2)
                        (> (length (car cs1)) (length (car cs2))))))
         inserted)
-    (loop for fc in sqc
+    (cl-loop for fc in sqc
       for scs on sqc
-      do (loop for sc in scs
+      do (cl-loop for sc in scs
            do (let ((cd (cl-set-difference (car fc) (car sc) :test #'equal))
                     (cv (cl-set-difference (cdr fc) (cdr sc))))
                 (when (and (= 1 (length cd)) (= 1 (length cv)))
@@ -1009,16 +1011,16 @@ Return non-nil if at least one has been inserted."
 (defun sudoku-insert-constrained (by-cell &optional deduce)
   "Insert constrained values.
 Return non-nil if at least one has been inserted."
-  (let ((rows (loop for i from 0 below 9
+  (let ((rows (cl-loop for i from 0 below 9
                 collect (sudoku-row-cells (cons 0 i))))
-        (cols (loop for i from 0 below 9
+        (cols (cl-loop for i from 0 below 9
                 collect (sudoku-col-cells (cons i 0))))
         (squares (mapcar #'sudoku-square-cells
                          '((0 . 0) (3 . 0) (6 . 0)
                            (0 . 3) (3 . 3) (6 . 3)
                            (0 . 6) (3 . 6) (6 . 6))))
         inserted)
-    (loop for cls in (append rows cols squares)
+    (cl-loop for cls in (append rows cols squares)
       if (sudoku-insert-constrained-cells cls by-cell deduce)
       do (progn
            (setq inserted t)
@@ -1619,7 +1621,7 @@ Doesn't let you go outside the bounds of the board."
        (point-max)))
 
     ;; collect all 81 cell-values in a list.
-    (list (loop while (re-search-forward "<INPUT CLASS=\\([ds]0\\)" nil t)
+    (list (cl-loop while (re-search-forward "<INPUT CLASS=\\([ds]0\\)" nil t)
             if (and (string= (match-string 1) "s0")
                     (re-search-forward "VALUE=\"\\([1-9]\\)\"" nil t))
             concat (match-string 1)
@@ -1641,7 +1643,7 @@ Doesn't let you go outside the bounds of the board."
       (delete-region (and (search-forward "</table>")
                           (match-beginning 0)) (point-max)))
 
-    (list (loop while (re-search-forward "<td[^>]*>\\([^<]+\\)</td>" nil t)
+    (list (cl-loop while (re-search-forward "<td[^>]*>\\([^<]+\\)</td>" nil t)
             for v = (match-string 1)
             concat (if (string= v "&nbsp;") "0" v))
           :id pid)))
@@ -1764,7 +1766,7 @@ Doesn't let you go outside the bounds of the board."
         (forward-line))
       ;; Parse board, puzzle itself and the state
       (cl-flet ((parse-board-inplace ()
-               (loop for i from 0 below 9
+               (cl-loop for i from 0 below 9
                   unless (looking-at "^[123456789.]\\{9,9\\}\r?$")
                   do (error "Invalid sdk file")
                   concat (subst-char-in-string
@@ -1809,7 +1811,7 @@ And append them into built-in puzzles table."
 (defun sudoku-string-to-board (nl)
   "Convert flat numbers list NL to sudoku board."
   (setq nl (mapcar #'(lambda (c) (- c 48)) (string-to-list nl)))
-  (loop for v on nl by #'(lambda (l) (nthcdr 9 l))
+  (cl-loop for v on nl by #'(lambda (l) (nthcdr 9 l))
     collect (cl-subseq v 0 9)))
 
 (defun sudoku-board-to-string (brd)
