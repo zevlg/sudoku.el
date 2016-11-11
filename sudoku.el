@@ -136,6 +136,8 @@
 
 (require 'cl-lib)
 (require 'easymenu)
+(eval-when-compile
+  (require 'cl)) ;; for defsetf
 
 ;;{{{ Custom variables
 
