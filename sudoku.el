@@ -6,7 +6,7 @@
 ;; Created: Thu Oct 29 21:55:35 2009
 ;; Keywords: games
 ;; Package-Requires: ((emacs "24.4"))
-;; Version: 1.4
+;; Version: 1.5
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License
@@ -118,6 +118,9 @@
 ;; format, http://www.sadmansoftware.com/sudoku/faq19.htm) with
 ;; `sudoku-save-puzzle' (C-x C-s) and `sudoku-load-puzzle' commands.
 ;;
+;; Also you can load puzzles from .sdm files using:
+;; M-x sudoku-load-puzzle-collection RET
+;;
 ;; To make Emacs load puzzle with `C-x C-f' add next to init.el
 ;;
 ;;   (add-to-list 'auto-mode-alist '("\\.sdk\\'" . sudoku-mode))
@@ -125,8 +128,14 @@
 ;;; History:
 ;;  ~~~~~~~
 ;;
-;; Version 1.5: [TODO]
-;;   - Puzzle timer
+;; Version 1.5:
+;; 
+;;   - TODO: widgets(for URL, level, comment) using
+;;   - `insert-text-button' to jump over with TAB
+;;   - TODO: Puzzle timer in modeline
+;;   - Minor improvements
+;;   - Date added to solved puzzles
+;;   - Support for sudoku collections files (.sdm)
 ;;
 ;; Version 1.4:
 ;;   - Initial port to GNU Emacs
@@ -169,30 +178,26 @@
   :group 'sudoku)
 
 (defface sudoku-face
-  '((t (:inherit default :height 2.0)))
+  '((t :inherit default :height 2.0))
   "Base face used by sudoku."
   :group 'sudoku)
 
 (defface sudoku-orig-value-face
-  `((t (:inherit sudoku-face)))
+  `((t :inherit sudoku-face :bold t))
   "Face for original values in sudoku field."
   :group 'sudoku)
 
 (defface sudoku-value-face
-  `((((type tty) (class color))
-     (:foreground "cyan" :inherit sudoku-orig-value-face))
-    (((class color) (background light))
-     (:foreground "darkblue" :inherit sudoku-orig-value-face))
+  `((((class color) (background light))
+     (:foreground "darkblue" :inherit sudoku-face))
     (((class color) (background dark))
-     (:foreground "blue" :inherit sudoku-orig-value-face))
-    (t (:inherit sudoku-orig-value-face)))
+     (:foreground "blue" :inherit sudoku-face))
+    (t (:inherit sudoku-face)))
   "Face for values you've inserted."
   :group 'sudoku)
 
 (defface sudoku-value-pencil-1-face
-  `((((type tty) (class color))
-     (:foreground "slategray" :inherit sudoku-face))
-    (((class color) (background light))
+  `((((class color) (background light))
      (:foreground "slategray" :inherit sudoku-face))
     (((class color) (background dark))
      (:foreground "slategray" :inherit sudoku-face))
@@ -201,9 +206,7 @@
   :group 'sudoku)
 
 (defface sudoku-value-pencil-2-face
-  `((((type tty) (class color))
-     (:foreground "darkgrey" :inherit sudoku-face))
-    (((class color) (background light))
+  `((((class color) (background light))
      (:foreground "darkgrey" :inherit sudoku-face))
     (((class color) (background dark))
      (:foreground "darkgrey" :inherit sudoku-face))
@@ -212,13 +215,11 @@
   :group 'sudoku)
 
 (defface sudoku-autovalue-face
-  `((((type tty) (class color))
-     (:foreground "cyan" :inherit sudoku-orig-value-face))
-    (((class color) (background light))
-     (:foreground "darkviolet" :inherit sudoku-orig-value-face))
+  `((((class color) (background light))
+     (:foreground "darkviolet" :inherit sudoku-face))
     (((class color) (background dark))
-     (:foreground "mediumpurple" :inherit sudoku-orig-value-face))
-    (t (:inherit sudoku-orig-value-face)))
+     (:foreground "mediumpurple" :inherit sudoku-face))
+    (t (:inherit sudoku-face)))
   "Face for values automatically insterted."
   :group 'sudoku)
 
@@ -237,6 +238,11 @@ Any style assumes fixed-width font."
 
 (defcustom sudoku-modeline-show-values t
   "*Non-nil to show possible values for current cell in modeline."
+  :type 'boolean
+  :group 'sudoku)
+
+(defcustom sudoku-modeline-show-timer t
+  "*Non-nil to show timer in modeline."
   :type 'boolean
   :group 'sudoku)
 
@@ -292,6 +298,9 @@ Called with one argument - cell."
 (defvar sudoku-custom-puzzles nil
   "List of custom sudoku puzzles.")
 
+(defvar sudoku-loaded-puzzles nil
+  "Downloaded puzzles and puzzles loaded from .sdm files")
+
 (cl-defstruct (sudoku-puzzle (:type list))
   board                                 ; puzzle board
   plist)                                ; puzzle properties
@@ -327,6 +336,11 @@ Called with one argument - cell."
   (sudoku-puzzle-get puzzle :comment))
 (defsetf sudoku-puzzle-comment (puzzle) (level)
   `(sudoku-puzzle-put ,puzzle :comment ,level))
+
+(defun sudoku-puzzle-solved-date (puzzle)
+  (sudoku-puzzle-get puzzle :solved-date))
+(defsetf sudoku-puzzle-solved-date (puzzle) (date)
+  `(sudoku-puzzle-put ,puzzle :solved-date ,date))
 
 (defvar sudoku-mode nil)
 (make-variable-buffer-local 'sudoku-mode)
@@ -500,7 +514,7 @@ Avoid selecting already solved puzzle unless prefix ARG is specified."
   (if sudoku-download
       (sudoku-initialize (sudoku-download-puzzle sudoku-level))
 
-    (let* ((puzs (sudoku-builtin-puzzles sudoku-level))
+    (let* ((puzs (sudoku-all-puzzles sudoku-level))
            (nsp (or (and arg puzs)
                     ;; Remove current puzzle and already solved
                     ;; puzzles
@@ -585,7 +599,9 @@ Avoid selecting already solved puzzle unless prefix ARG is specified."
          '(sudoku-modeline-show-values
            (", Hints: " sudoku-modeline-possible-values))
          "    "
-         global-mode-string
+         mode-line-modes
+         mode-line-misc-info
+         mode-line-end-spaces
          )))
 
 (defun sudoku-modeline-update ()
@@ -609,6 +625,8 @@ Avoid selecting already solved puzzle unless prefix ARG is specified."
   (list (propertize "Custom puzzle editor" 'face 'underline)
         "Fill in values"
         "Press `C-M-c' when done."
+        "To erase whole board use:"
+        "M-x sudoku-board-erase RET"
         ""
         (format "Level: %S" sudoku-level)
         (format "Cells to go: %d" (sudoku-remaining-cells))))
@@ -617,6 +635,9 @@ Avoid selecting already solved puzzle unless prefix ARG is specified."
   "Create custom board and play it.
 If called with prefix arg then edit empty puzzle."
   (interactive "P")
+  (when (sudoku-custom-p)
+    (error "Already editing custom puzzle, `C-M-c' to finish"))
+
   (let ((sudoku-after-change-hook nil)
         (sudoku-custom-editor t))
     (declare (special sudoku-custom-editor))
@@ -666,9 +687,29 @@ If called with prefix arg then edit empty puzzle."
   "Return the BOARD's CELL."
   (nth (car cell) (sudoku-row (or board sudoku-current-board) (cdr cell))))
 
-(defun sudoku-cell-empty-p (cell)
+(defun sudoku-cell-num (cell)
+  "Low level. Do not use it."
+  (or (and (numberp cell) cell) (car cell)))
+
+(defun sudoku-cell-name (cell)
+  "Return CELL's name in format RxCy."
+  (format "R%dC%d" (1+ (cdr cell)) (1+ (car cell))))
+
+(defun sudoku-cell-value (cell &optional board)
+  "Return value for the given CELL."
+  (sudoku-cell-num (sudoku-cell cell board)))
+
+(defun sudoku-cell-props (cell)
+  "Low level. Do not use it."
+  (and (listp cell) (cdr cell)))
+
+(defun sudoku-cell-plist-get (cell prop &optional board)
+  "From CELL's properties get property PROP."
+  (plist-get (sudoku-cell-props (sudoku-cell cell board)) prop))
+
+(defun sudoku-cell-empty-p (cell &optional board)
   "Return non-nil if CELL is empty."
-  (zerop (sudoku-cell-value cell)))
+  (zerop (sudoku-cell-value cell board)))
 
 ;;}}}
 ;;{{{ Possibles/solver functions
@@ -941,6 +982,17 @@ By default MIN-HINTS is 30."
                                     (get 'sudoku 'custom-links))))
       (sudoku-puzzle-generate level min-hints))))
 
+;;;###autoload
+(defun sudoku-solve ()
+  "Solve current puzzle."
+  (interactive)
+  (let ((solution (car (sudoku-board-solutions sudoku-current-board t))))
+    (sudoku-foreach-cell cc
+      (when (sudoku-cell-empty-p cc)
+        (sudoku-change-cell
+         cc (list (sudoku-cell-value cc solution) :face 'sudoku-face))))
+    (sudoku-board-redraw)))
+
 ;;}}}
 ;;{{{ Autoinserter
 
@@ -1118,26 +1170,6 @@ Auto-insert does not work for pencils."
   "Return number of hints for PUZZLE."
   (- 81 (sudoku-remaining-cells board)))
 
-(defun sudoku-cell-num (cell)
-  "Low level. Do not use it."
-  (or (and (numberp cell) cell) (car cell)))
-
-(defun sudoku-cell-name (cell)
-  "Return CELL's name in format RxCy."
-  (format "R%dC%d" (1+ (cdr cell)) (1+ (car cell))))
-
-(defun sudoku-cell-value (cell)
-  "Return value for the given CELL."
-  (sudoku-cell-num (sudoku-cell cell)))
-
-(defun sudoku-cell-props (cell)
-  "Low level. Do not use it."
-  (and (listp cell) (cdr cell)))
-
-(defun sudoku-cell-plist-get (cell prop)
-  "From CELL's properties get property PROP."
-  (plist-get (sudoku-cell-props (sudoku-cell cell)) prop))
-
 (defun sudoku-blank-cell ()
   "Return blank character for current `sudoku-style'."
   (cdr (assq sudoku-style sudoku-blank-cell)))
@@ -1172,8 +1204,6 @@ Auto-insert does not work for pencils."
 (defun sudoku-board-instructions ()
   "Return list of instructions strings."
   (list (format "Level: %S" (sudoku-puzzle-level sudoku-puzzle))
-;         (when (sudoku-puzzle-url sudoku-puzzle)
-;           (format "Puzzle URL: %s" (sudoku-puzzle-url sudoku-puzzle)))
         (when (sudoku-puzzle-file sudoku-puzzle)
           (format "Puzzle file: %s"
                   (sudoku-relative-filename
@@ -1181,6 +1211,8 @@ Auto-insert does not work for pencils."
         (when (sudoku-puzzle-id sudoku-puzzle)
           (format "Puzzle ID: %s" (sudoku-pid-with-commas
                                    (sudoku-puzzle-id sudoku-puzzle))))
+        (when (sudoku-puzzle-solved-date sudoku-puzzle)
+          (format "Solved on: %s" (sudoku-puzzle-solved-date sudoku-puzzle)))
         (when (sudoku-puzzle-comment sudoku-puzzle)
           (format "Comment: %s" (sudoku-puzzle-comment sudoku-puzzle)))
         (format "Start hints: %d" (sudoku-board-hints
@@ -1320,8 +1352,9 @@ All moves are valid while editing custom board."
 Run `sudoku-after-change-hook' after INPUT is inserted.
 Run tests to ensure that the change is a valid one."
   (interactive (list (sudoku-point-genprops (- last-command-event 48))))
-  (let ((cell (or cell (sudoku-current-cell)))
-        (sb (copy-tree sudoku-current-board)))
+  (let* ((curr-cell (sudoku-current-cell))
+         (cell (or cell curr-cell))
+         (sb (copy-tree sudoku-current-board)))
     (sudoku-test-and-change cell input)
     (sudoku-remove-autoinserted cell)
     (unwind-protect
@@ -1331,13 +1364,19 @@ Run tests to ensure that the change is a valid one."
         (push sb sudoku-boards-stack)))
 
     ;; Keep the cell position
-    (sudoku-goto-cell cell)))
+    (sudoku-goto-cell curr-cell)))
 
 (defun sudoku-cell-erase (&optional cell)
   "Erase value at CELL.
 Erase current cell if interactively called."
   (interactive)
   (sudoku-change-point 0 cell))
+
+(defun sudoku-board-erase ()
+  "Erase whole board."
+  (interactive)
+  (sudoku-foreach-cell cell
+    (sudoku-cell-erase cell)))
 
 ;;}}}
 ;;{{{ Utils functions/commands
@@ -1390,6 +1429,10 @@ Erase current cell if interactively called."
 (defun sudoku-completion-routine ()
   "Runs when there are no cells remaining. Gives a message of
 victory, and then asks if you want to play again."
+  ;; Remember when puzzle was solved
+  (setf (sudoku-puzzle-solved-date sudoku-puzzle)
+        (format-time-string "%Y-%m-%d %H:%M:%S"))
+
   (sudoku-board-redraw
    nil (append (sudoku-board-instructions)
                (list "" (propertize "YOU WON!" 'face 'sudoku-orig-value-face))))
@@ -1591,11 +1634,13 @@ Doesn't let you go outside the bounds of the board."
                       (ecase sudoku-download-source
                         (websudoku (sudoku-parse-websudoku))
                         (menneske (sudoku-parse-menneske))))
-                  (kill-buffer)))))
-    (sudoku-make-puzzle
-     `(,(car sud) :level ,level
-       :url ,(sudoku-download-source level (plist-get (cdr sud) :id))
-       ,@(cdr sud)))))
+                  (kill-buffer))))
+         (puzzle `(,(car sud) :level ,level
+                   :url ,(sudoku-download-source level (plist-get (cdr sud) :id))
+                   ,@(cdr sud))))
+
+    (push puzzle sudoku-loaded-puzzles)
+    (sudoku-make-puzzle puzzle)))
 
 (defun sudoku-parse-websudoku ()
   "Parse HTML and return list of three items.
@@ -1793,20 +1838,32 @@ And append them into built-in puzzles table."
                               "Puzzles Level: "
                               '(("easy") ("medium") ("hard") ("evil"))
                               nil t))))
-  ;; TODO
-  )
+  (with-temp-buffer
+    (insert-file-contents-literally file)
+
+    (setq sudoku-loaded-puzzles
+          (nconc
+           (mapcar #'(lambda (puzstr)
+                       (list puzstr
+                             :level level :url (format "file://%s" file)))
+                   (split-string
+                    (buffer-substring (point-min) (point-max)) "\n" t "[ \t\r]*"))
+           sudoku-loaded-puzzles))))
 
 ;;}}}
 
 
 ;;{{{ Built-in puzzles
 
-(defun sudoku-builtin-puzzles (level)
-  "Filter builtin puzzles by LEVEL."
+(defun sudoku-all-puzzles (level)
+  "Filter all available puzzles by LEVEL."
   (declare (special sudoku-builtin-puzzles)) ;shutup compiler
-  (cl-remove-if-not #'(lambda (bip)
-                        (eq (plist-get (cdr bip) :level) level))
-                    sudoku-builtin-puzzles))
+  (cl-flet ((level-matches
+             (bip) (eq (plist-get (cdr bip) :level) level)))
+    (nconc
+     (cl-remove-if-not #'level-matches sudoku-builtin-puzzles)
+     (cl-remove-if-not #'level-matches sudoku-loaded-puzzles)
+     (cl-remove-if-not #'level-matches sudoku-custom-puzzles))))
 
 (defun sudoku-string-to-board (nl)
   "Convert flat numbers list NL to sudoku board."
