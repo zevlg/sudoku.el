@@ -1651,11 +1651,15 @@ Doesn't let you go outside the bounds of the board."
 ;;}}}
 ;;{{{ Printing (TeX generation)
 
+(defcustom sudoku-print-dirname "/tmp/"
+  "Directory name specifying the TeX file location")
+
 (defun sudoku-print ()
   "Print current puzzle."
   (interactive)
-  (let ((auto-insert nil))
-    (find-file (format "/tmp/sudoku-%s.tex"
+  (let ((auto-insert nil)
+	(relfile-template "sudoku-%s.tex"))
+    (find-file (format (concat sudoku-print-dirname relfile-template)
                        (sudoku-puzzle-id sudoku-puzzle))))
   (erase-buffer)
   (insert "\\documentclass{article}\n")
